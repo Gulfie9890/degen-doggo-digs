@@ -13,9 +13,31 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Environment validation
+console.log('Starting server...');
+console.log('Environment variables check:');
+console.log('- OPENAI_API_KEY:', process.env.OPENAI_API_KEY ? 'Set' : 'Missing');
+console.log('- TAVILY_API_KEY:', process.env.TAVILY_API_KEY ? 'Set' : 'Missing');
+console.log('- PORT:', PORT);
+console.log('- __dirname:', __dirname);
+
+// Verify dist directory exists
+import fs from 'fs';
+const distPath = path.join(__dirname, 'dist');
+console.log('- dist directory exists:', fs.existsSync(distPath));
+if (fs.existsSync(distPath)) {
+  console.log('- dist contents:', fs.readdirSync(distPath));
+}
+
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+// Request logging
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} ${req.method} ${req.path}`);
+  next();
+});
 
 // Serve static files from the dist directory
 app.use(express.static(path.join(__dirname, 'dist')));
@@ -64,7 +86,19 @@ app.post('/api/research', async (req, res) => {
 
 // Catch all handler: send back React's index.html file for SPA routing
 app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+  try {
+    console.log('Serving SPA for route:', req.path);
+    const indexPath = path.join(__dirname, 'dist', 'index.html');
+    if (fs.existsSync(indexPath)) {
+      res.sendFile(indexPath);
+    } else {
+      console.error('index.html not found at:', indexPath);
+      res.status(404).send('Application not built properly - index.html missing');
+    }
+  } catch (error) {
+    console.error('Error serving SPA:', error);
+    res.status(500).send('Server error');
+  }
 });
 
 app.listen(PORT, '0.0.0.0', () => {
