@@ -45,10 +45,10 @@ export const OPENAI_DEFAULT_PARAMS = {
 };
 
 export const ENHANCED_SEARCH_STRATEGY = {
-  base: 20,
-  deep: 25, 
-  final: 20,
-  targeted: 15
+  base: { queries: 20, maxResults: 6 },
+  deep: { queries: 25, maxResults: 4 }, 
+  final: { queries: 20, maxResults: 5 },
+  targeted: { queries: 15, maxResults: 4 }
 };
 
 export class DeepResearchDegen {
@@ -250,14 +250,14 @@ Please structure your response according to the report structure provided above.
 
     const baseQueries = this.expandQueries(baseTerms, 3);
     const stage1Results = await this.searchService.searchEnhanced(
-      baseQueries.slice(0, ENHANCED_SEARCH_STRATEGY.base),
-      { maxResults: 4 }
+      baseQueries.slice(0, ENHANCED_SEARCH_STRATEGY.base.queries),
+      { maxResults: ENHANCED_SEARCH_STRATEGY.base.maxResults }
     );
     allSources.push(...stage1Results.results);
     
     stageMetrics.push({
       stage: 'base',
-      queries: baseQueries.slice(0, ENHANCED_SEARCH_STRATEGY.base).length,
+      queries: baseQueries.slice(0, ENHANCED_SEARCH_STRATEGY.base.queries).length,
       sources: stage1Results.results.length,
       duration: Date.now() - stageStartTime
     });
@@ -273,14 +273,14 @@ Please structure your response according to the report structure provided above.
       `${input.projectName} competition comparison analysis`
     ], 3);
     const stage2Results = await this.searchService.searchEnhanced(
-      deepQueries.slice(0, ENHANCED_SEARCH_STRATEGY.deep),
-      { maxResults: 3 }
+      deepQueries.slice(0, ENHANCED_SEARCH_STRATEGY.deep.queries),
+      { maxResults: ENHANCED_SEARCH_STRATEGY.deep.maxResults }
     );
     allSources.push(...stage2Results.results);
     
     stageMetrics.push({
       stage: 'deep',
-      queries: deepQueries.slice(0, ENHANCED_SEARCH_STRATEGY.deep).length,
+      queries: deepQueries.slice(0, ENHANCED_SEARCH_STRATEGY.deep.queries).length,
       sources: stage2Results.results.length,
       duration: Date.now() - stage2Start
     });
@@ -295,14 +295,14 @@ Please structure your response according to the report structure provided above.
       `${input.projectName} listing exchange trading volume`
     ], 2);
     const stage3Results = await this.searchService.searchEnhanced(
-      marketQueries.slice(0, ENHANCED_SEARCH_STRATEGY.final),
-      { maxResults: 3 }
+      marketQueries.slice(0, ENHANCED_SEARCH_STRATEGY.final.queries),
+      { maxResults: ENHANCED_SEARCH_STRATEGY.final.maxResults }
     );
     allSources.push(...stage3Results.results);
     
     stageMetrics.push({
       stage: 'market',
-      queries: marketQueries.slice(0, ENHANCED_SEARCH_STRATEGY.final).length,
+      queries: marketQueries.slice(0, ENHANCED_SEARCH_STRATEGY.final.queries).length,
       sources: stage3Results.results.length,
       duration: Date.now() - stage3Start
     });
@@ -317,14 +317,14 @@ Please structure your response according to the report structure provided above.
       `"${input.projectName}" review analysis report`
     ];
     const stage4Results = await this.searchService.searchEnhanced(
-      riskQueries.slice(0, ENHANCED_SEARCH_STRATEGY.targeted),
-      { maxResults: 2 }
+      riskQueries.slice(0, ENHANCED_SEARCH_STRATEGY.targeted.queries),
+      { maxResults: ENHANCED_SEARCH_STRATEGY.targeted.maxResults }
     );
     allSources.push(...stage4Results.results);
     
     stageMetrics.push({
       stage: 'risk',
-      queries: riskQueries.slice(0, ENHANCED_SEARCH_STRATEGY.targeted).length,
+      queries: riskQueries.slice(0, ENHANCED_SEARCH_STRATEGY.targeted.queries).length,
       sources: stage4Results.results.length,
       duration: Date.now() - stage4Start
     });
@@ -499,10 +499,49 @@ Format as comprehensive markdown with clear headings, bullet points, data tables
       const maxValidationAttempts = 2;
       
       while (!validationPassed && validationAttempts < maxValidationAttempts) {
-        const validation = await this.llmCall(
-          "gpt-4o",
-          2000,
-          `Review this final report for:
+        let validation;
+        
+        // Handle large reports by chunking validation
+        if (finalReport.length > 15000) {
+          const chunks = this.chunkReportForValidation(finalReport, 12000);
+          const chunkValidations = [];
+          
+          for (let i = 0; i < chunks.length; i++) {
+            const chunkValidation = await this.llmCall(
+              "gpt-4o",
+              2000,
+              `Review this section of a final report (Part ${i + 1}/${chunks.length}):
+
+Criteria:
+- Structural completeness for this section
+- Factual accuracy and consistency  
+- Professional tone and clarity
+- Proper speculation separation
+
+Respond with either:
+"PASS: Section meets quality standards"
+OR
+"FAIL: [specific issues in this section]"
+
+Report Section:
+${chunks[i]}`
+            );
+            chunkValidations.push(chunkValidation);
+          }
+          
+          // Aggregate chunk validations
+          const failedChunks = chunkValidations.filter(v => v.includes("FAIL:"));
+          if (failedChunks.length === 0) {
+            validation = "PASS: All sections meet quality standards";
+          } else {
+            validation = `FAIL: Issues found in ${failedChunks.length}/${chunks.length} sections:\n${failedChunks.join('\n')}`;
+          }
+        } else {
+          // Single validation for smaller reports
+          validation = await this.llmCall(
+            "gpt-4o",
+            2000,
+            `Review this final report for:
 - Structural completeness (all required sections present)
 - Factual accuracy and consistency  
 - Professional tone and clarity
@@ -515,8 +554,9 @@ OR
 "FAIL: [specific issues to fix]"
 
 Report to validate:
-${finalReport.substring(0, 12000)}${finalReport.length > 12000 ? '...' : ''}`
-        );
+${finalReport}`
+          );
+        }
 
         if (validation.includes("PASS:")) {
           validationPassed = true;
@@ -591,9 +631,9 @@ Create an improved version addressing all validation concerns.`
     const ranking = await this.llmCall(
       "gpt-4o",
       3000,
-      `Rank these sources by relevance for the query: "${query}"
-      
-Return a comma-separated list of source numbers (1-${Math.min(sources.length, 120)}) in order of relevance.
+      `Rank these sources by relevance for the crypto research query: "${query.projectName || query}"
+
+Return a JSON array of source numbers in order of relevance.
 Focus on sources that provide:
 - Primary information about the project/token
 - Financial data and metrics  
@@ -604,20 +644,33 @@ Focus on sources that provide:
 Sources:
 ${sourcesList}
 
-Response format: 1,15,3,22,8...`
+Respond with ONLY a JSON array like: [1, 15, 3, 22, 8, ...]`
     );
     
     try {
-      const rankings = ranking.match(/\d+/g)?.map(n => parseInt(n) - 1) || [];
-      const rankedSources = rankings
-        .filter(i => i >= 0 && i < sources.length)
+      // First try to parse as JSON
+      let rankings = [];
+      try {
+        const jsonMatch = ranking.match(/\[[\d,\s]+\]/);
+        if (jsonMatch) {
+          rankings = JSON.parse(jsonMatch[0]).map(n => parseInt(n) - 1);
+        }
+      } catch (parseError) {
+        // Fallback to regex parsing
+        rankings = ranking.match(/\d+/g)?.map(n => parseInt(n) - 1) || [];
+      }
+      
+      // Validate rankings and ensure all sources are included
+      const validRankings = rankings.filter(i => i >= 0 && i < sources.length);
+      const rankedSources = validRankings
         .map(i => sources[i])
-        .concat(sources.filter((_, i) => !rankings.includes(i)))
+        .concat(sources.filter((_, i) => !validRankings.includes(i)))
         .slice(0, 100); // Cap at 100 ranked sources
         
       this.logStage("AI Source Ranking", { 
         originalCount: sources.length,
         rankedCount: rankedSources.length,
+        validRankings: validRankings.length,
         topSources: rankedSources.slice(0, 5).map(s => s.title)
       });
       
@@ -827,6 +880,33 @@ Response format: 1,15,3,22,8...`
         source.content.substring(0, targetSummaryLength) + (source.content.length > targetSummaryLength ? '...' : '')
       );
     }
+  }
+
+  chunkReportForValidation(report, chunkSize = 12000) {
+    const chunks = [];
+    let currentPosition = 0;
+    
+    while (currentPosition < report.length) {
+      let endPosition = currentPosition + chunkSize;
+      
+      // Try to break at paragraph boundaries for better context
+      if (endPosition < report.length) {
+        const nextParagraph = report.indexOf('\n\n', endPosition);
+        const prevParagraph = report.lastIndexOf('\n\n', endPosition);
+        
+        // If we can find a reasonable paragraph break, use it
+        if (nextParagraph !== -1 && nextParagraph - endPosition < 500) {
+          endPosition = nextParagraph;
+        } else if (prevParagraph !== -1 && endPosition - prevParagraph < 500) {
+          endPosition = prevParagraph;
+        }
+      }
+      
+      chunks.push(report.substring(currentPosition, endPosition));
+      currentPosition = endPosition;
+    }
+    
+    return chunks;
   }
 
   generateRequestId() {
