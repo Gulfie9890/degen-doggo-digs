@@ -263,122 +263,117 @@ Please structure your response according to the report structure provided above.
   }
 
   async fetchSourcesMultiStage(input) {
-    let stageMetrics = [];
-    const allSources = [];
+    this.logStage('multi_stage_search', 'Starting resilient multi-stage source gathering...');
     
-    // Stage 1: Base discovery queries (increased delay)
-    const stageStartTime = Date.now();
-    const baseTerms = [
-      input.projectName,
-      `${input.projectName} crypto`,
-      `${input.projectName} token`,
-      `${input.projectName} blockchain`
+    const stages = [
+      {
+        name: 'base',
+        terms: [input.projectName, `${input.projectName} crypto`, `${input.projectName} token`].filter(Boolean),
+        queryMultiplier: 2,
+        essential: true
+      },
+      {
+        name: 'deep',
+        terms: [
+          `${input.projectName} whitepaper`,
+          `${input.projectName} tokenomics`,
+          `${input.projectName} team`
+        ],
+        queryMultiplier: 2,
+        essential: true
+      },
+      {
+        name: 'market',
+        terms: [
+          `${input.projectName} price analysis`,
+          `${input.projectName} trading volume`
+        ],
+        queryMultiplier: 1,
+        essential: false
+      },
+      {
+        name: 'risk',
+        terms: [
+          `${input.projectName} security audit`,
+          `${input.projectName} risks`
+        ],
+        queryMultiplier: 1,
+        essential: false
+      }
     ];
 
-    if (input.website) {
-      baseTerms.push(`site:${input.website.replace(/^https?:\/\//, '')}`);
+    let allSources = [];
+    const stageMetrics = [];
+    let totalSuccessfulStages = 0;
+
+    for (const stage of stages) {
+      const stageStart = Date.now();
+      this.logStage('stage_start', `Starting ${stage.name} stage`);
+      
+      try {
+        const queries = this.expandQueries(stage.terms, stage.queryMultiplier);
+        
+        const searchResult = await withExponentialBackoff(
+          () => this.searchService.searchEnhanced(queries, { maxResults: 3 }),
+          stage.essential ? 3 : 1,
+          1000
+        );
+        
+        const stageDuration = Date.now() - stageStart;
+        const stageSourceCount = searchResult.results.length;
+        
+        stageMetrics.push({
+          stage: stage.name,
+          queries: queries.length,
+          sources: stageSourceCount,
+          duration: stageDuration,
+          success: stageSourceCount > 0
+        });
+        
+        if (stageSourceCount > 0) {
+          allSources.push(...searchResult.results);
+          totalSuccessfulStages++;
+          this.logStage('stage_success', `${stage.name} stage: ${stageSourceCount} sources`);
+        } else {
+          this.logStage('stage_empty', `${stage.name} stage: no sources found`);
+          
+          // If essential stage fails, try simplified query
+          if (stage.essential && stage.terms.length > 0) {
+            this.logStage('stage_retry', `Retrying ${stage.name} with simplified query`);
+            const simpleQuery = stage.terms[0]; // Use first term only
+            const fallbackResult = await this.searchService.searchSingle(simpleQuery, { maxResults: 5 });
+            
+            if (fallbackResult.results.length > 0) {
+              allSources.push(...fallbackResult.results);
+              totalSuccessfulStages++;
+              this.logStage('stage_fallback_success', `${stage.name} fallback: ${fallbackResult.results.length} sources`);
+            }
+          }
+        }
+      } catch (error) {
+        this.logStage('stage_error', `${stage.name} stage failed: ${error.message}`);
+        stageMetrics.push({
+          stage: stage.name,
+          queries: 0,
+          sources: 0,
+          duration: Date.now() - stageStart,
+          success: false,
+          error: error.message
+        });
+      }
     }
-    if (input.twitter) {
-      baseTerms.push(`site:twitter.com ${input.projectName}`);
-    }
 
-    const baseQueries = this.expandQueries(baseTerms, 3);
-    const stage1Results = await withExponentialBackoff(() =>
-      this.searchService.searchEnhanced(
-        baseQueries.slice(0, ENHANCED_SEARCH_STRATEGY.base.queries),
-        { maxResults: ENHANCED_SEARCH_STRATEGY.base.maxResults }
-      )
-    );
-    allSources.push(...stage1Results.results);
-    
-    stageMetrics.push({
-      stage: 'base',
-      queries: baseQueries.slice(0, ENHANCED_SEARCH_STRATEGY.base.queries).length,
-      sources: stage1Results.results.length,
-      duration: Date.now() - stageStartTime
-    });
+    const uniqueSources = this.deduplicateSources(allSources);
+    const totalSources = uniqueSources.length;
 
-    // Stage 2: Deep analysis queries  
-    const stage2Start = Date.now();
-    const deepQueries = this.expandQueries([
-      `${input.projectName} team founders CEO`,
-      `${input.projectName} tokenomics supply distribution`,
-      `${input.projectName} roadmap development milestones`,
-      `${input.projectName} partnerships investors funding`,
-      `${input.projectName} use case utility value proposition`,
-      `${input.projectName} competition comparison analysis`
-    ], 3);
-    const stage2Results = await withExponentialBackoff(() =>
-      this.searchService.searchEnhanced(
-        deepQueries.slice(0, ENHANCED_SEARCH_STRATEGY.deep.queries),
-        { maxResults: ENHANCED_SEARCH_STRATEGY.deep.maxResults }
-      )
-    );
-    allSources.push(...stage2Results.results);
-    
-    stageMetrics.push({
-      stage: 'deep',
-      queries: deepQueries.slice(0, ENHANCED_SEARCH_STRATEGY.deep.queries).length,
-      sources: stage2Results.results.length,
-      duration: Date.now() - stage2Start
-    });
-
-    // Stage 3: Market & community queries
-    const stage3Start = Date.now();
-    const marketQueries = this.expandQueries([
-      `${input.projectName} price prediction market cap`,
-      `${input.projectName} community social telegram discord`,
-      `${input.projectName} smart contract security audit`,
-      `${input.projectName} airdrop rewards incentives`,
-      `${input.projectName} listing exchange trading volume`
-    ], 2);
-    const stage3Results = await withExponentialBackoff(() =>
-      this.searchService.searchEnhanced(
-        marketQueries.slice(0, ENHANCED_SEARCH_STRATEGY.final.queries),
-        { maxResults: ENHANCED_SEARCH_STRATEGY.final.maxResults }
-      )
-    );
-    allSources.push(...stage3Results.results);
-    
-    stageMetrics.push({
-      stage: 'market',
-      queries: marketQueries.slice(0, ENHANCED_SEARCH_STRATEGY.final.queries).length,
-      sources: stage3Results.results.length,
-      duration: Date.now() - stage3Start
-    });
-
-    // Stage 4: Targeted risk & technical queries
-    const stage4Start = Date.now();
-    const riskQueries = [
-      `${input.projectName} risks concerns red flags`,
-      `${input.projectName} technical implementation architecture`,
-      `${input.projectName} regulatory compliance legal`,
-      `${input.projectName} news updates recent developments`,
-      `"${input.projectName}" review analysis report`
-    ];
-    const stage4Results = await withExponentialBackoff(() =>
-      this.searchService.searchEnhanced(
-        riskQueries.slice(0, ENHANCED_SEARCH_STRATEGY.targeted.queries),
-        { maxResults: ENHANCED_SEARCH_STRATEGY.targeted.maxResults }
-      )
-    );
-    allSources.push(...stage4Results.results);
-    
-    stageMetrics.push({
-      stage: 'risk',
-      queries: riskQueries.slice(0, ENHANCED_SEARCH_STRATEGY.targeted.queries).length,
-      sources: stage4Results.results.length,
-      duration: Date.now() - stage4Start
-    });
-
-    // Log stage performance
-    this.logDebug('multi_stage_search', {
-      totalSources: allSources.length,
+    this.logStage('multi_stage_search', {
+      totalSources,
+      totalSuccessfulStages,
       stageMetrics,
-      totalQueries: stageMetrics.reduce((sum, s) => sum + s.queries, 0)
+      totalQueries: stageMetrics.reduce((sum, stage) => sum + stage.queries, 0)
     });
 
-    return this.deduplicateSources(allSources);
+    return uniqueSources;
   }
 
   calculateDetailScore(sources) {
@@ -419,8 +414,23 @@ Please structure your response according to the report structure provided above.
       // Stage 1: Source Gathering + AI Ranking
       this.logStage("Stage 1: Source Gathering + AI Ranking", { model: MODEL_CONFIG.primary });
       const rawSources = await this.fetchSourcesMultiStage(input);
+      
+      // More flexible source threshold
       if (!rawSources || rawSources.length === 0) {
-        throw new Error("No sources found during search");
+        this.logStage('source_fallback', 'No sources found, trying emergency fallback...');
+        
+        // Emergency fallback: try a simple search
+        const emergencyResult = await this.searchService.searchSingle(
+          input.projectName + ' cryptocurrency',
+          { maxResults: 10, useFallback: true }
+        );
+        
+        if (!emergencyResult || emergencyResult.results.length === 0) {
+          throw new Error('Research pipeline failed: Unable to gather sufficient sources. Please try again.');
+        }
+        
+        rawSources.push(...emergencyResult.results);
+        this.logStage('source_emergency', `Emergency fallback found ${emergencyResult.results.length} sources`);
       }
 
       // AI-assisted source ranking
