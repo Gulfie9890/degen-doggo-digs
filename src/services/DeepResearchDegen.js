@@ -70,6 +70,12 @@ export const OPENAI_DEFAULT_PARAMS = {
   temperature: 0.3,
 };
 
+export const MODEL_CONFIG = {
+  primary: "gpt-4.1-2025-04-14",
+  reasoning: "o3-deep-research",
+  fallback: "gpt-4.1-2025-04-14"
+};
+
 export const ENHANCED_SEARCH_STRATEGY = {
   base: { queries: 20, maxResults: 6 },
   deep: { queries: 25, maxResults: 4 }, 
@@ -411,18 +417,18 @@ Please structure your response according to the report structure provided above.
 
     try {
       // Stage 1: Source Gathering + AI Ranking
-      this.logStage("Stage 1: Source Gathering + AI Ranking", { model: "gpt-4o" });
+      this.logStage("Stage 1: Source Gathering + AI Ranking", { model: MODEL_CONFIG.primary });
       const rawSources = await this.fetchSourcesMultiStage(input);
       if (!rawSources || rawSources.length === 0) {
         throw new Error("No sources found during search");
       }
 
-      // AI-assisted source ranking with gpt-4o
+      // AI-assisted source ranking
       const rankedSources = await this.rankSourcesWithAI(rawSources, input);
 
-      // Stage 2: Content Extraction with gpt-4o
+      // Stage 2: Content Extraction
       this.logStage("Stage 2: Content Extraction", { 
-        model: "gpt-4o", 
+        model: MODEL_CONFIG.primary, 
         sources: rankedSources.length
       });
       
@@ -433,7 +439,7 @@ Please structure your response according to the report structure provided above.
         const batchPromises = batch.map(async (source) => {
           try {
             const extractedContent = await this.llmCall(
-              "gpt-4o",
+              MODEL_CONFIG.primary,
               this.calculateDynamicTokens("extraction", source.content.length),
               `Extract and summarize the key information from this source in 200-500 tokens. Focus on factual content relevant to crypto/blockchain research:
 
@@ -458,9 +464,9 @@ Provide a structured summary with key facts, figures, and insights.`
         extractedSources.push(...batchResults.filter(Boolean));
       }
 
-      // Stage 3: Factual Synthesis with o3-deep-research-preview
+      // Stage 3: Factual Synthesis
       this.logStage("Stage 3: Factual Synthesis", { 
-        model: "o3-deep-research-preview",
+        model: MODEL_CONFIG.reasoning,
         sources: extractedSources.length 
       });
       
@@ -469,7 +475,7 @@ Provide a structured summary with key facts, figures, and insights.`
         .join('\n\n---\n\n');
       
       const synthesis = await this.llmCall(
-        "o3-deep-research-preview", 
+        MODEL_CONFIG.reasoning, 
         this.calculateDynamicTokens("synthesis", sourcesText.length),
         `Based on the following extracted sources, create a comprehensive factual synthesis covering these sections:
 ${REPORT_STRUCTURE.join('\n- ')}
@@ -480,13 +486,13 @@ Sources:
 ${sourcesText}`
       );
 
-      // Stage 4: Speculation with o3-deep-research-preview
+      // Stage 4: Speculation
       this.logStage("Stage 4: Speculation", { 
-        model: "o3-deep-research-preview"
+        model: MODEL_CONFIG.reasoning
       });
       
       const speculation = await this.llmCall(
-        "o3-deep-research-preview",
+        MODEL_CONFIG.reasoning,
         this.calculateDynamicTokens("speculation", synthesis.length),
         `Based on the factual synthesis below, create a separate speculation analysis with:
 - Potential future scenarios and market predictions
@@ -501,13 +507,13 @@ Factual Synthesis:
 ${synthesis}`
       );
 
-      // Stage 5: Final Report Assembly with o3-deep-research-preview
+      // Stage 5: Final Report Assembly
       this.logStage("Stage 5: Final Report Assembly", { 
-        model: "o3-deep-research-preview"
+        model: MODEL_CONFIG.reasoning
       });
       
       let finalReport = await this.llmCall(
-        "o3-deep-research-preview",
+        MODEL_CONFIG.reasoning,
         this.calculateDynamicTokens("final_report", synthesis.length + speculation.length),
         `Create a polished, professional investor-grade report with these components:
 
@@ -527,8 +533,8 @@ ${speculation}
 Format as comprehensive markdown with clear headings, bullet points, data tables where appropriate, and professional investment research tone.`
       );
 
-      // Stage 6: Validation with gpt-4o + Re-validation Loop
-      this.logStage("Stage 6: Validation", { model: "gpt-4o" });
+      // Stage 6: Validation + Re-validation Loop
+      this.logStage("Stage 6: Validation", { model: MODEL_CONFIG.primary });
       
       let validationPassed = false;
       let validationAttempts = 0;
@@ -544,7 +550,7 @@ Format as comprehensive markdown with clear headings, bullet points, data tables
           
           for (let i = 0; i < chunks.length; i++) {
             const chunkValidation = await this.llmCall(
-              "gpt-4o",
+              MODEL_CONFIG.primary,
               2000,
               `Review this section of a final report (Part ${i + 1}/${chunks.length}):
 
@@ -575,7 +581,7 @@ ${chunks[i]}`
         } else {
           // Single validation for smaller reports
           validation = await this.llmCall(
-            "gpt-4o",
+            MODEL_CONFIG.primary,
             2000,
             `Review this final report for:
 - Structural completeness (all required sections present)
@@ -608,7 +614,7 @@ ${finalReport}`
           if (validationAttempts < maxValidationAttempts) {
             // Re-run Stage 5 with validation feedback
             finalReport = await this.llmCall(
-              "o3-deep-research-preview",
+              MODEL_CONFIG.reasoning,
               this.calculateDynamicTokens("final_report", synthesis.length + speculation.length),
               `Revise the following report based on validation feedback:
 
@@ -632,12 +638,18 @@ Create an improved version addressing all validation concerns.`
 
       const endTime = Date.now();
       
+      // Add backward compatibility fields
+      const compatibleSources = rawSources.map(source => ({
+        ...source,
+        snippet: source.content?.substring(0, 200) || ''
+      }));
+
       return {
         requestId,
         report: finalReport,
         factualSynthesis: synthesis,
         speculativeAnalysis: speculation,
-        sources: rawSources,
+        sources: compatibleSources,
         extractedSources,
         metadata: {
           totalSources: rawSources.length,
@@ -646,14 +658,28 @@ Create an improved version addressing all validation concerns.`
           validationAttempts,
           createdAt: Date.now(),
           totalDuration: endTime - startTime,
-          stages: this.debugLogs
+          stages: this.debugLogs,
+          // Calculated compatibility fields
+          confidenceScore: this.calculateConfidenceScore(this.debugLogs, rawSources),
+          wordCount: finalReport.split(' ').length,
+          detailScore: this.calculateDetailScore(rawSources),
+          sourceVariety: this.calculateSourceVariety(rawSources),
+          topicCoverage: this.calculateTopicCoverage(rawSources)
         }
       };
       
     } catch (error) {
       console.error('Pipeline execution failed:', error);
-      this.logStage("Pipeline Error", { error: error.message });
-      throw error;
+      this.logStage("Pipeline Error", { error: error.message, stack: error.stack });
+      
+      // Enhanced error handling with fallback
+      if (error.message.includes('model') || error.message.includes('API')) {
+        throw new Error(`Research pipeline failed: ${error.message}. Please check API configuration and model availability.`);
+      } else if (error.message.includes('sources')) {
+        throw new Error(`Research pipeline failed: Unable to gather sufficient sources. Please try again.`);
+      } else {
+        throw new Error(`Research pipeline failed: ${error.message}`);
+      }
     }
   }
 
@@ -665,7 +691,7 @@ Create an improved version addressing all validation concerns.`
     ).join('\n\n');
     
     const ranking = await this.llmCall(
-      "gpt-4o",
+      MODEL_CONFIG.primary,
       3000,
       `Rank these sources by relevance for the crypto research query: "${query.projectName || query}"
 
@@ -754,10 +780,29 @@ Respond with ONLY a JSON array like: [1, 15, 3, 22, 8, ...]`
         })
       );
 
+      // Enhanced response validation
+      if (!response.choices?.[0]?.message?.content) {
+        throw new Error(`Invalid response from model ${model}: No content returned`);
+      }
+
+      this.logDebug('llm_call_success', {
+        model,
+        tokens: response.usage?.total_tokens || 0,
+        responseLength: response.choices[0].message.content.length
+      });
+
       return response.choices[0].message.content;
     } catch (error) {
+      this.logDebug('llm_call_error', { model, error: error.message });
+      
+      // Enhanced error handling with fallback
+      if (error.message.includes('model') && model !== MODEL_CONFIG.fallback) {
+        console.warn(`Model ${model} failed, attempting fallback to ${MODEL_CONFIG.fallback}`);
+        return this.llmCall(MODEL_CONFIG.fallback, tokens, prompt);
+      }
+      
       console.error(`LLM call failed for model ${model}:`, error.message);
-      throw error;
+      throw new Error(`AI model call failed: ${error.message}`);
     }
   }
 
@@ -772,14 +817,17 @@ Respond with ONLY a JSON array like: [1, 15, 3, 22, 8, ...]`
     console.log(`[STAGE] ${stage}`, details);
   }
 
-  calculateConfidenceScore(pipelineResults, searchResults) {
-    const pipelineScore = pipelineResults.length > 0 ? 80 : 40;
-    const searchQuality = this.calculateSearchQuality(searchResults);
-    return Math.round((pipelineScore + searchQuality) / 2);
+  calculateConfidenceScore(debugLogs, sources) {
+    const stageCount = debugLogs.filter(log => log.type === 'stage').length;
+    const sourceQuality = this.calculateSearchResultQuality(sources);
+    const completionScore = stageCount >= 6 ? 90 : 60;
+    return Math.round((completionScore + sourceQuality) / 2);
   }
 
-  calculateSearchQuality(searchResults) {
-    const { detailScore, sourceVariety, topicCoverage } = searchResults;
+  calculateSearchQuality(sources) {
+    const detailScore = this.calculateDetailScore(sources);
+    const sourceVariety = this.calculateSourceVariety(sources);
+    const topicCoverage = this.calculateTopicCoverage(sources);
     const topicScore = (topicCoverage.length / 6) * 100;
     return Math.round((detailScore + sourceVariety + topicScore) / 3);
   }
@@ -882,7 +930,7 @@ Respond with ONLY a JSON array like: [1, 15, 3, 22, 8, ...]`
     try {
       const response = await withExponentialBackoff(() =>
         this.openai.chat.completions.create({
-          model: "gpt-4.1-2025-04-14",
+          model: MODEL_CONFIG.primary,
           max_completion_tokens: mode === 'compressed' ? 1000 : 2000,
           temperature: 0.2,
           messages: [{ role: "user", content: prompt }]
