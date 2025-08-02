@@ -45,10 +45,10 @@ export const OPENAI_DEFAULT_PARAMS = {
 };
 
 export const ENHANCED_SEARCH_STRATEGY = {
-  base: 15,
-  deep: 20, 
-  final: 15,
-  targeted: 10
+  base: 20,
+  deep: 25, 
+  final: 20,
+  targeted: 15
 };
 
 export class DeepResearchDegen {
@@ -371,216 +371,283 @@ Please structure your response according to the report structure provided above.
   async runPipeline(input) {
     const requestId = this.generateRequestId();
     const startTime = Date.now();
+    this.debugLogs = [];
 
     try {
-      // Check cost constraints before starting
-      const currentCost = this.costTracker.getTotalCost();
-      if (currentCost > 50) {
-        throw new Error('Cost limit exceeded');
+      // Stage 1: Source Gathering + AI Ranking
+      this.logStage("Stage 1: Source Gathering + AI Ranking", { model: "gpt-4o" });
+      const rawSources = await this.fetchSourcesMultiStage(input);
+      if (!rawSources || rawSources.length === 0) {
+        throw new Error("No sources found during search");
       }
 
-      this.logDebug('6-Stage Pipeline started', { requestId, input, currentCost });
+      // AI-assisted source ranking with gpt-4o
+      const rankedSources = await this.rankSourcesWithAI(rawSources, input);
 
-      // ---------------------------
-      // Stage 1: Source Gathering
-      // ---------------------------
-      this.logStage("Stage 1: Source Gathering", { status: "starting" });
-      const sources = await this.fetchSourcesMultiStage(input);
-      
-      if (!sources || sources.length === 0) {
-        throw new Error('No sources found for the given input');
-      }
-
-      this.logStage("Stage 1: Source Gathering", { 
-        status: "completed",
-        count: sources.length,
-        avgContentLength: sources.reduce((sum, s) => sum + s.content.length, 0) / sources.length
+      // Stage 2: Content Extraction with gpt-4o
+      this.logStage("Stage 2: Content Extraction", { 
+        model: "gpt-4o", 
+        sources: rankedSources.length
       });
-
-      // ---------------------------
-      // Stage 2: Content Extraction
-      // ---------------------------
-      this.logStage("Stage 2: Content Extraction", { status: "starting", model: "gpt-4.1-2025-04-14" });
-      const extractedSources = [];
       
-      // Process sources in batches to avoid rate limits
+      const extractedSources = [];
       const batchSize = 10;
-      for (let i = 0; i < Math.min(sources.length, 50); i += batchSize) {
-        const batch = sources.slice(i, i + batchSize);
-        const batchPromises = batch.map(async (src) => {
+      for (let i = 0; i < Math.min(rankedSources.length, 100); i += batchSize) {
+        const batch = rankedSources.slice(i, i + batchSize);
+        const batchPromises = batch.map(async (source) => {
           try {
-            const summary = await this.llmCall("gpt-4.1-2025-04-14", 500, `
-              Summarize the following source in exactly 200-300 tokens, keeping all factual details about the crypto project:
-              Title: ${src.title}
-              URL: ${src.url}
-              Content: ${src.content.substring(0, 4000)}
-              
-              Focus on: team, tokenomics, partnerships, technology, community metrics, and any concrete data.
-            `);
-            return { ...src, summary, extracted: true };
+            const extractedContent = await this.llmCall(
+              "gpt-4o",
+              this.calculateDynamicTokens("extraction", source.content.length),
+              `Extract and summarize the key information from this source in 200-500 tokens. Focus on factual content relevant to crypto/blockchain research:
+
+Title: ${source.title}
+URL: ${source.url}
+Content: ${source.content.substring(0, 6000)}
+
+Provide a structured summary with key facts, figures, and insights.`
+            );
+            
+            return {
+              ...source,
+              extractedContent
+            };
           } catch (error) {
-            console.warn(`Failed to extract content for ${src.url}:`, error.message);
-            return { ...src, summary: src.content.substring(0, 300), extracted: false };
+            console.warn(`Failed to extract content from source:`, error.message);
+            return null;
           }
         });
         
         const batchResults = await Promise.all(batchPromises);
-        extractedSources.push(...batchResults);
-        
-        // Small delay between batches
-        if (i + batchSize < Math.min(sources.length, 50)) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
+        extractedSources.push(...batchResults.filter(Boolean));
+      }
+
+      // Stage 3: Factual Synthesis with o3-deep-research-preview
+      this.logStage("Stage 3: Factual Synthesis", { 
+        model: "o3-deep-research-preview",
+        sources: extractedSources.length 
+      });
+      
+      const sourcesText = extractedSources
+        .map(s => `Title: ${s.title}\nURL: ${s.url}\nContent: ${s.extractedContent}`)
+        .join('\n\n---\n\n');
+      
+      const synthesis = await this.llmCall(
+        "o3-deep-research-preview", 
+        this.calculateDynamicTokens("synthesis", sourcesText.length),
+        `Based on the following extracted sources, create a comprehensive factual synthesis covering these sections:
+${REPORT_STRUCTURE.join('\n- ')}
+
+Focus ONLY on factual information. Avoid speculation or predictions. Use specific data, quotes, and concrete details from the sources.
+
+Sources:
+${sourcesText}`
+      );
+
+      // Stage 4: Speculation with o3-deep-research-preview
+      this.logStage("Stage 4: Speculation", { 
+        model: "o3-deep-research-preview"
+      });
+      
+      const speculation = await this.llmCall(
+        "o3-deep-research-preview",
+        this.calculateDynamicTokens("speculation", synthesis.length),
+        `Based on the factual synthesis below, create a separate speculation analysis with:
+- Potential future scenarios and market predictions
+- Risk assessments and opportunity analysis
+- Investment implications and strategic considerations
+- Technology development forecasts
+- Competitive landscape evolution
+
+Keep this as a standalone speculative section, clearly separated from facts.
+
+Factual Synthesis:
+${synthesis}`
+      );
+
+      // Stage 5: Final Report Assembly with o3-deep-research-preview
+      this.logStage("Stage 5: Final Report Assembly", { 
+        model: "o3-deep-research-preview"
+      });
+      
+      let finalReport = await this.llmCall(
+        "o3-deep-research-preview",
+        this.calculateDynamicTokens("final_report", synthesis.length + speculation.length),
+        `Create a polished, professional investor-grade report with these components:
+
+STRUCTURE (use these exact headings):
+${REPORT_STRUCTURE.map(section => `## ${section}`).join('\n')}
+
+## 🔮 Speculative Analysis
+[Keep speculation in this separate, clearly marked section]
+
+CONTENT TO MERGE:
+Factual Synthesis:
+${synthesis}
+
+Speculative Analysis:
+${speculation}
+
+Format as comprehensive markdown with clear headings, bullet points, data tables where appropriate, and professional investment research tone.`
+      );
+
+      // Stage 6: Validation with gpt-4o + Re-validation Loop
+      this.logStage("Stage 6: Validation", { model: "gpt-4o" });
+      
+      let validationPassed = false;
+      let validationAttempts = 0;
+      const maxValidationAttempts = 2;
+      
+      while (!validationPassed && validationAttempts < maxValidationAttempts) {
+        const validation = await this.llmCall(
+          "gpt-4o",
+          2000,
+          `Review this final report for:
+- Structural completeness (all required sections present)
+- Factual accuracy and consistency  
+- Professional tone and clarity
+- Proper speculation separation
+- Investment-grade quality
+
+Respond with either:
+"PASS: Report meets all quality standards"
+OR
+"FAIL: [specific issues to fix]"
+
+Report to validate:
+${finalReport.substring(0, 12000)}${finalReport.length > 12000 ? '...' : ''}`
+        );
+
+        if (validation.includes("PASS:")) {
+          validationPassed = true;
+          this.logStage("Validation Result", { status: "PASSED", attempts: validationAttempts + 1 });
+        } else {
+          validationAttempts++;
+          this.logStage("Validation Result", { 
+            status: "FAILED", 
+            attempt: validationAttempts, 
+            issues: validation 
+          });
+          
+          if (validationAttempts < maxValidationAttempts) {
+            // Re-run Stage 5 with validation feedback
+            finalReport = await this.llmCall(
+              "o3-deep-research-preview",
+              this.calculateDynamicTokens("final_report", synthesis.length + speculation.length),
+              `Revise the following report based on validation feedback:
+
+VALIDATION ISSUES:
+${validation}
+
+ORIGINAL REPORT:
+${finalReport}
+
+FACTUAL CONTENT:
+${synthesis}
+
+SPECULATIVE CONTENT:
+${speculation}
+
+Create an improved version addressing all validation concerns.`
+            );
+          }
         }
       }
 
-      this.logStage("Stage 2: Content Extraction", { 
-        status: "completed",
-        processed: extractedSources.length,
-        successful: extractedSources.filter(s => s.extracted).length
-      });
-
-      // ---------------------------
-      // Stage 3: Synthesis
-      // ---------------------------
-      this.logStage("Stage 3: Synthesis", { status: "starting", model: "gpt-4.1-2025-04-14" });
-      const synthesis = await this.llmCall("gpt-4.1-2025-04-14", 8000, `
-        Using the following extracted content, synthesize a detailed factual report covering all sections.
-        AVOID SPECULATION - focus only on verified facts and data.
-        
-        Required sections: ${REPORT_STRUCTURE.join(", ")}
-        
-        Extracted Sources:
-        ${extractedSources.map((s, idx) => `
-        [Source ${idx + 1}] ${s.title}
-        URL: ${s.url}
-        Summary: ${s.summary}
-        `).join("\n")}
-        
-        Create a comprehensive factual analysis covering each required section with specific data points and evidence.
-      `);
-
-      this.logStage("Stage 3: Synthesis", { 
-        status: "completed",
-        outputLength: synthesis.length
-      });
-
-      // ---------------------------
-      // Stage 4: Speculation
-      // ---------------------------
-      this.logStage("Stage 4: Speculation", { status: "starting", model: "gpt-4.1-2025-04-14" });
-      const speculation = await this.llmCall("gpt-4.1-2025-04-14", 6000, `
-        Take the following factual synthesis and add a clearly marked speculation layer.
-        
-        Add sections for:
-        - Potential future scenarios (3-6 months)
-        - Market positioning predictions
-        - Risk assessment and opportunities
-        - Competitive advantages/disadvantages
-        - Investment thesis considerations
-        
-        CLEARLY MARK speculation as separate from facts using headers like "🔮 SPECULATION:" or "📊 PREDICTIONS:"
-        
-        Factual Base:
-        ${synthesis}
-      `);
-
-      this.logStage("Stage 4: Speculation", { 
-        status: "completed",
-        outputLength: speculation.length
-      });
-
-      // ---------------------------
-      // Stage 5: Final Report
-      // ---------------------------
-      this.logStage("Stage 5: Final Report", { status: "starting", model: "gpt-4.1-2025-04-14" });
-      const finalReport = await this.llmCall("gpt-4.1-2025-04-14", 12000, `
-        Merge the following components into a polished, professional investor-grade research report.
-        
-        Use markdown formatting with clear headers for each section:
-        ${REPORT_STRUCTURE.map(section => `## ${section}`).join("\n")}
-        
-        Structure:
-        1. Start with factual synthesis as the foundation
-        2. Integrate speculation clearly marked in appropriate sections
-        3. Ensure professional tone and comprehensive coverage
-        4. Include data points, metrics, and specific evidence
-        5. End with a balanced conclusion covering both facts and predictions
-        
-        Factual Synthesis:
-        ${synthesis}
-        
-        Speculation Layer:
-        ${speculation}
-      `);
-
-      this.logStage("Stage 5: Final Report", { 
-        status: "completed",
-        outputLength: finalReport.length
-      });
-
-      // ---------------------------
-      // Stage 6: Validation
-      // ---------------------------
-      this.logStage("Stage 6: Validation", { status: "starting", model: "gpt-4.1-2025-04-14" });
-      const validation = await this.llmCall("gpt-4.1-2025-04-14", 1500, `
-        Review the following final report for:
-        - Structural completeness (all required sections present)
-        - Factual consistency and logical flow
-        - Appropriate separation of facts vs speculation
-        - Professional presentation and formatting
-        - Coverage of key crypto project aspects
-        
-        Provide a brief assessment and list any critical gaps or inconsistencies.
-        
-        Required sections to check: ${REPORT_STRUCTURE.join(", ")}
-        
-        Final Report:
-        ${finalReport.substring(0, 8000)}...
-      `);
-
-      this.logStage("Stage 6: Validation", { 
-        status: "completed",
-        outputLength: validation.length
-      });
-
       const endTime = Date.now();
-      const totalDuration = endTime - startTime;
-
-      this.logDebug('6-Stage Pipeline completed successfully', {
-        requestId,
-        totalDuration,
-        totalSources: extractedSources.length,
-        reportLength: finalReport.length,
-        validationPassed: !validation.toLowerCase().includes('critical')
-      });
-
+      
       return {
         requestId,
         report: finalReport,
-        sources: extractedSources.slice(0, 25), // Return top 25 sources for display
+        factualSynthesis: synthesis,
+        speculativeAnalysis: speculation,
+        sources: rawSources,
+        extractedSources,
         metadata: {
+          totalSources: rawSources.length,
+          extractedSources: extractedSources.length,
+          validationPassed,
+          validationAttempts,
           createdAt: Date.now(),
-          totalDuration,
-          sourcesAnalyzed: extractedSources.length,
-          pipelineStages: this.debugLogs.filter(log => log.stage),
-          validation: {
-            report: validation,
-            passed: !validation.toLowerCase().includes('critical')
-          },
-          confidenceScore: 0.85 // High confidence due to 6-stage process
+          totalDuration: endTime - startTime,
+          stages: this.debugLogs
         }
       };
-
+      
     } catch (error) {
-      const endTime = Date.now();
-      this.logDebug('6-Stage Pipeline failed', { 
-        requestId, 
-        error: error.message, 
-        duration: endTime - startTime 
+      console.error('Pipeline execution failed:', error);
+      this.logStage("Pipeline Error", { error: error.message });
+      throw error;
+    }
+  }
+
+  async rankSourcesWithAI(sources, query) {
+    if (sources.length <= 20) return sources; // No need to rank if small set
+    
+    const sourcesList = sources.slice(0, 120).map((s, i) => 
+      `${i + 1}. ${s.title} - ${s.url}\n   Preview: ${s.content.substring(0, 200)}...`
+    ).join('\n\n');
+    
+    const ranking = await this.llmCall(
+      "gpt-4o",
+      3000,
+      `Rank these sources by relevance for the query: "${query}"
+      
+Return a comma-separated list of source numbers (1-${Math.min(sources.length, 120)}) in order of relevance.
+Focus on sources that provide:
+- Primary information about the project/token
+- Financial data and metrics  
+- Team and development info
+- Community and social metrics
+- Technical documentation
+
+Sources:
+${sourcesList}
+
+Response format: 1,15,3,22,8...`
+    );
+    
+    try {
+      const rankings = ranking.match(/\d+/g)?.map(n => parseInt(n) - 1) || [];
+      const rankedSources = rankings
+        .filter(i => i >= 0 && i < sources.length)
+        .map(i => sources[i])
+        .concat(sources.filter((_, i) => !rankings.includes(i)))
+        .slice(0, 100); // Cap at 100 ranked sources
+        
+      this.logStage("AI Source Ranking", { 
+        originalCount: sources.length,
+        rankedCount: rankedSources.length,
+        topSources: rankedSources.slice(0, 5).map(s => s.title)
       });
       
-      throw new Error(`Pipeline failed: ${error.message}`);
+      return rankedSources;
+    } catch (error) {
+      console.warn('Source ranking failed, using original order:', error.message);
+      return sources.slice(0, 100);
     }
+  }
+
+  calculateDynamicTokens(stage, contentLength) {
+    const baseTokens = {
+      extraction: 1000,
+      synthesis: 10000,
+      speculation: 6000, 
+      final_report: 16000
+    };
+    
+    const contentFactor = Math.min(contentLength / 10000, 2); // Max 2x multiplier
+    const dynamicTokens = Math.floor(baseTokens[stage] * (1 + contentFactor * 0.5));
+    
+    // Cap at reasonable maximums
+    const maxTokens = {
+      extraction: 2000,
+      synthesis: 15000,
+      speculation: 10000,
+      final_report: 25000
+    };
+    
+    return Math.min(dynamicTokens, maxTokens[stage] || baseTokens[stage]);
   }
 
   async llmCall(model, tokens, prompt) {
