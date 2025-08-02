@@ -39,9 +39,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// Serve static files from the dist directory
-app.use(express.static(path.join(__dirname, 'dist')));
-
 // Health check endpoint for Railway
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'OK', timestamp: new Date().toISOString() });
@@ -83,6 +80,9 @@ app.post('/api/research', async (req, res) => {
     });
   }
 });
+
+// Serve static files from the dist directory (after API routes)
+app.use(express.static(path.join(__dirname, 'dist')));
 
 // Catch all handler: send back React's index.html file for SPA routing
 app.get('*', (req, res) => {
