@@ -24,13 +24,30 @@ export class EnhancedSearchService {
         body: JSON.stringify({
           api_key: this.apiKey,
           query,
-          search_depth: 'advanced',
+          search_depth: 'deep',
           include_answer: false,
           include_images: false,
           include_raw_content: true,
           max_results: maxResults,
-          include_domains: [],
-          exclude_domains: []
+          include_domains: [
+            'cointelegraph.com',
+            'coindesk.com',
+            'coingecko.com',
+            'coinmarketcap.com',
+            'medium.com',
+            'github.com',
+            'substack.com',
+            'defipulse.com',
+            'messari.io',
+            'dappradar.com'
+          ],
+          exclude_domains: [
+            'twitter.com',
+            'facebook.com',
+            'instagram.com',
+            'tiktok.com',
+            'reddit.com'
+          ]
         }),
       });
 
@@ -70,7 +87,7 @@ export class EnhancedSearchService {
       allResults.push(...response.results);
       totalQueries += response.totalQueries;
       
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise(resolve => setTimeout(resolve, 1500));
     }
 
     const uniqueResults = allResults.filter((result, index, self) => 
