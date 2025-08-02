@@ -4,6 +4,32 @@ import { CostTracker } from "./CostTracker.js";
 import { SearchAnalytics } from "./SearchAnalytics.js";
 import { PipelineService } from "./PipelineService.js";
 
+// Exponential backoff utility for rate limit handling
+async function withExponentialBackoff(fn, retries = 5, baseDelay = 1000) {
+  let attempt = 0;
+  while (attempt < retries) {
+    try {
+      return await fn();
+    } catch (err) {
+      // Check for rate limit errors from different APIs
+      const isRateLimit = err.status === 429 || 
+                         err.code === 'RateLimitError' ||
+                         err.message?.includes('rate limit') ||
+                         err.message?.includes('429');
+      
+      if (isRateLimit && attempt < retries - 1) {
+        const delay = baseDelay * Math.pow(2, attempt); // 1s, 2s, 4s, 8s...
+        console.warn(`Rate limit hit. Retrying in ${delay}ms... (attempt ${attempt + 1}/${retries})`);
+        await new Promise(r => setTimeout(r, delay));
+        attempt++;
+      } else {
+        throw err; // Other errors or max retries reached
+      }
+    }
+  }
+  throw new Error('Max retries reached after rate limit errors');
+}
+
 export const REPORT_STRUCTURE = [
   "TLDR",
   "Project Information & Competition",
@@ -67,7 +93,9 @@ export class DeepResearchDegen {
   async searchWeb(query, maxResults = 15) {
     const startTime = Date.now();
     try {
-      const searchResults = await this.searchService.searchSingle(query, { maxResults });
+      const searchResults = await withExponentialBackoff(() => 
+        this.searchService.searchSingle(query, { maxResults })
+      );
       const duration = Date.now() - startTime;
       
       // Debug logging for search performance
@@ -249,9 +277,11 @@ Please structure your response according to the report structure provided above.
     }
 
     const baseQueries = this.expandQueries(baseTerms, 3);
-    const stage1Results = await this.searchService.searchEnhanced(
-      baseQueries.slice(0, ENHANCED_SEARCH_STRATEGY.base.queries),
-      { maxResults: ENHANCED_SEARCH_STRATEGY.base.maxResults }
+    const stage1Results = await withExponentialBackoff(() =>
+      this.searchService.searchEnhanced(
+        baseQueries.slice(0, ENHANCED_SEARCH_STRATEGY.base.queries),
+        { maxResults: ENHANCED_SEARCH_STRATEGY.base.maxResults }
+      )
     );
     allSources.push(...stage1Results.results);
     
@@ -272,9 +302,11 @@ Please structure your response according to the report structure provided above.
       `${input.projectName} use case utility value proposition`,
       `${input.projectName} competition comparison analysis`
     ], 3);
-    const stage2Results = await this.searchService.searchEnhanced(
-      deepQueries.slice(0, ENHANCED_SEARCH_STRATEGY.deep.queries),
-      { maxResults: ENHANCED_SEARCH_STRATEGY.deep.maxResults }
+    const stage2Results = await withExponentialBackoff(() =>
+      this.searchService.searchEnhanced(
+        deepQueries.slice(0, ENHANCED_SEARCH_STRATEGY.deep.queries),
+        { maxResults: ENHANCED_SEARCH_STRATEGY.deep.maxResults }
+      )
     );
     allSources.push(...stage2Results.results);
     
@@ -294,9 +326,11 @@ Please structure your response according to the report structure provided above.
       `${input.projectName} airdrop rewards incentives`,
       `${input.projectName} listing exchange trading volume`
     ], 2);
-    const stage3Results = await this.searchService.searchEnhanced(
-      marketQueries.slice(0, ENHANCED_SEARCH_STRATEGY.final.queries),
-      { maxResults: ENHANCED_SEARCH_STRATEGY.final.maxResults }
+    const stage3Results = await withExponentialBackoff(() =>
+      this.searchService.searchEnhanced(
+        marketQueries.slice(0, ENHANCED_SEARCH_STRATEGY.final.queries),
+        { maxResults: ENHANCED_SEARCH_STRATEGY.final.maxResults }
+      )
     );
     allSources.push(...stage3Results.results);
     
@@ -316,9 +350,11 @@ Please structure your response according to the report structure provided above.
       `${input.projectName} news updates recent developments`,
       `"${input.projectName}" review analysis report`
     ];
-    const stage4Results = await this.searchService.searchEnhanced(
-      riskQueries.slice(0, ENHANCED_SEARCH_STRATEGY.targeted.queries),
-      { maxResults: ENHANCED_SEARCH_STRATEGY.targeted.maxResults }
+    const stage4Results = await withExponentialBackoff(() =>
+      this.searchService.searchEnhanced(
+        riskQueries.slice(0, ENHANCED_SEARCH_STRATEGY.targeted.queries),
+        { maxResults: ENHANCED_SEARCH_STRATEGY.targeted.maxResults }
+      )
     );
     allSources.push(...stage4Results.results);
     
@@ -711,10 +747,12 @@ Respond with ONLY a JSON array like: [1, 15, 3, 22, 8, ...]`
         ? { model, max_completion_tokens: tokens, temperature: 0.3 }
         : { model, max_completion_tokens: tokens, temperature: 0.3 };
 
-      const response = await this.openai.chat.completions.create({
-        ...params,
-        messages: [{ role: "user", content: prompt }]
-      });
+      const response = await withExponentialBackoff(() =>
+        this.openai.chat.completions.create({
+          ...params,
+          messages: [{ role: "user", content: prompt }]
+        })
+      );
 
       return response.choices[0].message.content;
     } catch (error) {
@@ -822,8 +860,8 @@ Respond with ONLY a JSON array like: [1, 15, 3, 22, 8, ...]`
       const batchSummaries = await this.summarizeBatch(batch, mode);
       summaries.push(...batchSummaries);
       
-      // Add delay to respect rate limits
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Small delay between batches (exponential backoff handles retries)
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
     
     return summaries;
@@ -842,12 +880,14 @@ Respond with ONLY a JSON array like: [1, 15, 3, 22, 8, ...]`
       : `Provide detailed ${targetSummaryLength}-character summaries for each source below. Include: project details, tokenomics, team background, partnerships, technical aspects, community sentiment, and any red flags.\n\n${sourcesText}`;
     
     try {
-      const response = await this.openai.chat.completions.create({
-        model: "gpt-4.1-2025-04-14",
-        max_completion_tokens: mode === 'compressed' ? 1000 : 2000,
-        temperature: 0.2,
-        messages: [{ role: "user", content: prompt }]
-      });
+      const response = await withExponentialBackoff(() =>
+        this.openai.chat.completions.create({
+          model: "gpt-4.1-2025-04-14",
+          max_completion_tokens: mode === 'compressed' ? 1000 : 2000,
+          temperature: 0.2,
+          messages: [{ role: "user", content: prompt }]
+        })
+      );
       
       const summaryText = response.choices[0].message.content;
       
