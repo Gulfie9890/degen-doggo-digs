@@ -40,7 +40,7 @@ Make this report valuable to sophisticated crypto investors.`;
 
 export const OPENAI_DEFAULT_PARAMS = {
   model: "gpt-4.1-2025-04-14",
-  max_tokens: 8192,
+  max_completion_tokens: 8192,
   temperature: 0.3,
 };
 

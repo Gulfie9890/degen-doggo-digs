@@ -118,7 +118,7 @@ export class PipelineService {
           content: `Analyze these sources:\n${content}`
         }
       ] as OpenAI.Chat.ChatCompletionMessageParam[],
-      max_tokens: 2000,
+      max_completion_tokens: 2000,
       temperature: 0.3
     });
 
@@ -138,7 +138,7 @@ export class PipelineService {
           content: `Based on this analysis, create structured insights:\n${analysis}`
         }
       ] as OpenAI.Chat.ChatCompletionMessageParam[],
-      max_tokens: 2000,
+      max_completion_tokens: 2000,
       temperature: 0.3
     });
 
@@ -172,7 +172,7 @@ Use markdown formatting and make the report comprehensive yet concise.`
           content: `Create a final report based on this synthesis:\n${synthesis}`
         }
       ] as OpenAI.Chat.ChatCompletionMessageParam[],
-      max_tokens: 4000,
+      max_completion_tokens: 4000,
       temperature: 0.7
     });
 
