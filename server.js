@@ -4,16 +4,8 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-// Try to import DeepResearchDegen with error handling
-let DeepResearchDegen;
-try {
-  const module = await import('./src/services/DeepResearchDegen.js');
-  DeepResearchDegen = module.DeepResearchDegen;
-  console.log('✅ DeepResearchDegen imported successfully');
-} catch (error) {
-  console.error('❌ Failed to import DeepResearchDegen:', error.message);
-  console.error('Full error:', error);
-}
+// Import DeepResearchDegen directly
+import { DeepResearchDegen } from './src/services/DeepResearchDegen.js';
 
 dotenv.config();
 
@@ -51,7 +43,16 @@ app.use((req, res, next) => {
 
 // Health check endpoint for Railway
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'OK', timestamp: new Date().toISOString() });
+  console.log('Health check called');
+  res.status(200).json({ 
+    status: 'OK', 
+    timestamp: new Date().toISOString(),
+    deepResearchLoaded: !!DeepResearchDegen,
+    apiKeys: {
+      openai: !!process.env.OPENAI_API_KEY,
+      tavily: !!process.env.TAVILY_API_KEY
+    }
+  });
 });
 
 // Research API endpoint
@@ -59,13 +60,6 @@ app.post('/api/research', async (req, res) => {
   console.log('📡 Research API called');
   
   try {
-    // Check if DeepResearchDegen was imported successfully
-    if (!DeepResearchDegen) {
-      return res.status(500).json({ 
-        error: 'Research service not available - import failed' 
-      });
-    }
-
     const { projectName, website, twitter, contractAddress } = req.body;
 
     if (!projectName) {
@@ -76,10 +70,14 @@ app.post('/api/research', async (req, res) => {
     const tavilyKey = process.env.TAVILY_API_KEY;
 
     if (!openaiKey || !tavilyKey) {
+      console.error('Missing API keys:', { openai: !!openaiKey, tavily: !!tavilyKey });
       return res.status(500).json({ 
-        error: 'API keys not configured on server' 
+        error: 'API keys not configured on server',
+        details: 'Both OpenAI and Tavily API keys are required' 
       });
     }
+
+    console.log('Starting research for:', projectName);
 
     const researcher = new DeepResearchDegen(openaiKey, tavilyKey);
     

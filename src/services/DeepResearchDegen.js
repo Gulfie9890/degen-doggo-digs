@@ -15,22 +15,40 @@ export const REPORT_STRUCTURE = [
   "Conclusion"
 ];
 
-export const SEARCH_PROMPT_TEMPLATE = `You are an expert blockchain analyst. Your job is to research a given crypto project and create a report based on the following structure:
+export const SEARCH_PROMPT_TEMPLATE = `You are a world-class blockchain analyst with deep expertise in DeFi, tokenomics, and crypto market dynamics. 
+
+Analyze the provided sources with extreme attention to detail and create a comprehensive research report. Focus on:
+- **Critical analysis** over generic descriptions  
+- **Specific data points** and metrics where available
+- **Red flags** and risk factors
+- **Competitive positioning** and market context
+- **Technical implementation** details
+- **Community sentiment** and social signals
+
+Structure your analysis exactly as follows:
 ${REPORT_STRUCTURE.map((section, index) => `${index + 1}. ${section}`).join('\n')}
 
-Your report should be comprehensive, clear, and concise. Use markdown formatting.
-`;
+**Requirements:**
+- Minimum 2000 words total
+- Each section should contain specific, actionable insights
+- Include quantitative data wherever possible  
+- Provide critical analysis, not just project marketing
+- Flag any concerning patterns or red flags
+- Use professional markdown formatting with clear headers
+
+Make this report valuable to sophisticated crypto investors.`;
 
 export const OPENAI_DEFAULT_PARAMS = {
-  model: "gpt-4.1-2025-04-14",
-  max_tokens: 4096,
-  temperature: 0.7,
+  model: "o4-mini-2025-04-16",
+  max_tokens: 8192,
+  temperature: 0.3,
 };
 
 export const ENHANCED_SEARCH_STRATEGY = {
-  base: 8,
-  deep: 12, 
-  final: 6
+  base: 15,
+  deep: 20, 
+  final: 15,
+  targeted: 10
 };
 
 export class DeepResearchDegen {
@@ -59,7 +77,7 @@ Contract Address: ${input.contractAddress || 'Not provided'}
     `.trim();
 
     const sourcesText = sources.map((source, index) => 
-      `Source ${index + 1}: ${source.title}\nURL: ${source.url}\nContent: ${source.content.substring(0, 2000)}...\n\n`
+      `Source ${index + 1}: ${source.title}\nURL: ${source.url}\nContent: ${source.content.substring(0, 5000)}${source.content.length > 5000 ? '...' : ''}\n\n`
     ).join('');
 
     const prompt = `${SEARCH_PROMPT_TEMPLATE}
@@ -118,46 +136,69 @@ Please structure your response according to the report structure provided above.
     const baseTerms = [
       input.projectName,
       `${input.projectName} crypto`,
-      `${input.projectName} token`
+      `${input.projectName} token`,
+      `${input.projectName} blockchain`
     ];
 
     if (input.website) {
       baseTerms.push(`site:${input.website.replace(/^https?:\/\//, '')}`);
     }
+    if (input.twitter) {
+      baseTerms.push(`site:twitter.com ${input.projectName}`);
+    }
 
     const allSources = [];
 
-    // Stage 1: Base queries
-    const baseQueries = this.expandQueries(baseTerms, 2);
+    // Stage 1: Base discovery queries
+    const baseQueries = this.expandQueries(baseTerms, 3);
     const stage1Results = await this.searchService.searchEnhanced(
       baseQueries.slice(0, ENHANCED_SEARCH_STRATEGY.base),
-      { maxResults: 3 }
+      { maxResults: 4 }
     );
     allSources.push(...stage1Results.results);
 
-    // Stage 2: Deep queries  
+    // Stage 2: Deep analysis queries  
     const deepQueries = this.expandQueries([
-      `${input.projectName} team founders`,
-      `${input.projectName} tokenomics`,
-      `${input.projectName} roadmap`
-    ], 2);
+      `${input.projectName} team founders CEO`,
+      `${input.projectName} tokenomics supply distribution`,
+      `${input.projectName} roadmap development milestones`,
+      `${input.projectName} partnerships investors funding`,
+      `${input.projectName} use case utility value proposition`,
+      `${input.projectName} competition comparison analysis`
+    ], 3);
     const stage2Results = await this.searchService.searchEnhanced(
       deepQueries.slice(0, ENHANCED_SEARCH_STRATEGY.deep),
-      { maxResults: 2 }
+      { maxResults: 3 }
     );
     allSources.push(...stage2Results.results);
 
-    // Stage 3: Final targeted queries
-    const finalQueries = [
-      `${input.projectName} price analysis`,
-      `${input.projectName} community social`,
-      `${input.projectName} smart contract`
-    ];
+    // Stage 3: Market & community queries
+    const marketQueries = this.expandQueries([
+      `${input.projectName} price prediction market cap`,
+      `${input.projectName} community social telegram discord`,
+      `${input.projectName} smart contract security audit`,
+      `${input.projectName} airdrop rewards incentives`,
+      `${input.projectName} listing exchange trading volume`
+    ], 2);
     const stage3Results = await this.searchService.searchEnhanced(
-      finalQueries.slice(0, ENHANCED_SEARCH_STRATEGY.final),
-      { maxResults: 2 }
+      marketQueries.slice(0, ENHANCED_SEARCH_STRATEGY.final),
+      { maxResults: 3 }
     );
     allSources.push(...stage3Results.results);
+
+    // Stage 4: Targeted risk & technical queries
+    const riskQueries = [
+      `${input.projectName} risks concerns red flags`,
+      `${input.projectName} technical implementation architecture`,
+      `${input.projectName} regulatory compliance legal`,
+      `${input.projectName} news updates recent developments`,
+      `"${input.projectName}" review analysis report`
+    ];
+    const stage4Results = await this.searchService.searchEnhanced(
+      riskQueries.slice(0, ENHANCED_SEARCH_STRATEGY.targeted),
+      { maxResults: 2 }
+    );
+    allSources.push(...stage4Results.results);
 
     return this.deduplicateSources(allSources);
   }
