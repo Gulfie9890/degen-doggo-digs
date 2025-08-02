@@ -6,43 +6,52 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
-import { DeepResearchDegen, ProjectInput, ResearchReport } from '@/services/DeepResearchDegen';
-import { Loader2, Search, Key, ExternalLink } from 'lucide-react';
+import { Loader2, Search, ExternalLink } from 'lucide-react';
+
+interface ProjectInput {
+  projectName: string;
+  website: string;
+  twitter: string;
+  contractAddress: string;
+}
+
+interface ResearchReport {
+  report: string;
+  sources: Array<{
+    title: string;
+    url: string;
+    content: string;
+  }>;
+  requestId: string;
+  confidenceScore: number;
+  metadata: {
+    createdAt: number;
+    requestId: string;
+    sourcesFound: number;
+    wordCount: number;
+    detailScore: number;
+    sourceVariety: number;
+    topicCoverage: string[];
+    duration: number;
+    searchQueries: number;
+    pipelineStages: number;
+  };
+}
 
 export const ResearchEngine = () => {
   const { toast } = useToast();
-  const [openaiKey, setOpenaiKey] = useState(localStorage.getItem('openai_key') || '');
-  const [tavilyKey, setTavilyKey] = useState(localStorage.getItem('tavily_key') || '');
   const [projectInput, setProjectInput] = useState<ProjectInput>({
-    project_name: '',
-    project_website: '',
-    project_twitter: '',
-    project_contract: ''
+    projectName: '',
+    website: '',
+    twitter: '',
+    contractAddress: ''
   });
   const [isLoading, setIsLoading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [report, setReport] = useState<ResearchReport | null>(null);
 
-  const saveApiKeys = () => {
-    localStorage.setItem('openai_key', openaiKey);
-    localStorage.setItem('tavily_key', tavilyKey);
-    toast({
-      title: "API Keys Saved",
-      description: "Your API keys have been saved locally",
-    });
-  };
-
   const generateReport = async () => {
-    if (!openaiKey || !tavilyKey) {
-      toast({
-        title: "Missing API Keys",
-        description: "Please provide both OpenAI and Tavily API keys",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    if (!projectInput.project_name) {
+    if (!projectInput.projectName) {
       toast({
         title: "Missing Project Name",
         description: "Please provide a project name",
@@ -56,14 +65,31 @@ export const ResearchEngine = () => {
     setReport(null);
 
     try {
-      const researcher = new DeepResearchDegen(openaiKey, tavilyKey);
-      
       // Simulate progress updates
       const progressInterval = setInterval(() => {
         setProgress(prev => Math.min(prev + 10, 90));
       }, 2000);
 
-      const result = await researcher.generateReport(projectInput);
+      // Call backend API
+      const response = await fetch('/api/research', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          projectName: projectInput.projectName,
+          website: projectInput.website,
+          twitter: projectInput.twitter,
+          contractAddress: projectInput.contractAddress,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Research failed');
+      }
+
+      const result = await response.json();
       
       clearInterval(progressInterval);
       setProgress(100);
@@ -71,7 +97,7 @@ export const ResearchEngine = () => {
 
       toast({
         title: "Research Complete",
-        description: "Your crypto research report has been generated",
+        description: `Generated report for ${projectInput.projectName} with ${result.sources.length} sources.`,
       });
     } catch (error) {
       console.error('Research failed:', error);
@@ -99,47 +125,6 @@ export const ResearchEngine = () => {
           </CardHeader>
         </Card>
 
-        {/* API Configuration Section */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Key className="w-4 h-4" />
-              API Configuration
-            </CardTitle>
-            <CardDescription>
-              Enter your API keys to enable crypto research functionality
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="openai-key">OpenAI API Key</Label>
-                <Input
-                  id="openai-key"
-                  type="password"
-                  value={openaiKey}
-                  onChange={(e) => setOpenaiKey(e.target.value)}
-                  placeholder="sk-..."
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="tavily-key">Tavily API Key</Label>
-                <Input
-                  id="tavily-key"
-                  type="password"
-                  value={tavilyKey}
-                  onChange={(e) => setTavilyKey(e.target.value)}
-                  placeholder="tvly-..."
-                />
-              </div>
-            </div>
-            <Button onClick={saveApiKeys} className="w-full">
-              Save API Keys
-            </Button>
-          </CardContent>
-        </Card>
-
-        <Separator />
 
         {/* Project Research Section */}
         <Card>
@@ -158,8 +143,8 @@ export const ResearchEngine = () => {
                 <Label htmlFor="project-name">Project Name *</Label>
                 <Input
                   id="project-name"
-                  value={projectInput.project_name}
-                  onChange={(e) => setProjectInput({...projectInput, project_name: e.target.value})}
+                  value={projectInput.projectName}
+                  onChange={(e) => setProjectInput({...projectInput, projectName: e.target.value})}
                   placeholder="e.g., Ethereum, Chainlink, Uniswap"
                 />
               </div>
@@ -167,8 +152,8 @@ export const ResearchEngine = () => {
                 <Label htmlFor="project-website">Project Website</Label>
                 <Input
                   id="project-website"
-                  value={projectInput.project_website}
-                  onChange={(e) => setProjectInput({...projectInput, project_website: e.target.value})}
+                  value={projectInput.website}
+                  onChange={(e) => setProjectInput({...projectInput, website: e.target.value})}
                   placeholder="https://..."
                 />
               </div>
@@ -176,8 +161,8 @@ export const ResearchEngine = () => {
                 <Label htmlFor="project-twitter">Twitter Handle</Label>
                 <Input
                   id="project-twitter"
-                  value={projectInput.project_twitter}
-                  onChange={(e) => setProjectInput({...projectInput, project_twitter: e.target.value})}
+                  value={projectInput.twitter}
+                  onChange={(e) => setProjectInput({...projectInput, twitter: e.target.value})}
                   placeholder="@projectname"
                 />
               </div>
@@ -185,8 +170,8 @@ export const ResearchEngine = () => {
                 <Label htmlFor="project-contract">Contract Address</Label>
                 <Input
                   id="project-contract"
-                  value={projectInput.project_contract || ''}
-                  onChange={(e) => setProjectInput({...projectInput, project_contract: e.target.value})}
+                  value={projectInput.contractAddress}
+                  onChange={(e) => setProjectInput({...projectInput, contractAddress: e.target.value})}
                   placeholder="0x..."
                 />
               </div>
@@ -201,7 +186,7 @@ export const ResearchEngine = () => {
 
             <Button 
               onClick={generateReport} 
-              disabled={isLoading || !openaiKey || !tavilyKey}
+              disabled={isLoading}
               className="w-full"
             >
               {isLoading ? (
@@ -253,7 +238,7 @@ export const ResearchEngine = () => {
                   <div>
                     <div className="text-sm text-muted-foreground">Duration</div>
                     <div className="text-2xl font-bold text-primary">
-                      {(report.metadata.durationMs / 1000).toFixed(1)}s
+                      {(report.metadata.duration / 1000).toFixed(1)}s
                     </div>
                   </div>
                 </CardContent>
