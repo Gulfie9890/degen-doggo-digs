@@ -3,7 +3,17 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { DeepResearchDegen } from './src/services/DeepResearchDegen.js';
+
+// Try to import DeepResearchDegen with error handling
+let DeepResearchDegen;
+try {
+  const module = await import('./src/services/DeepResearchDegen.js');
+  DeepResearchDegen = module.DeepResearchDegen;
+  console.log('✅ DeepResearchDegen imported successfully');
+} catch (error) {
+  console.error('❌ Failed to import DeepResearchDegen:', error.message);
+  console.error('Full error:', error);
+}
 
 dotenv.config();
 
@@ -46,7 +56,16 @@ app.get('/health', (req, res) => {
 
 // Research API endpoint
 app.post('/api/research', async (req, res) => {
+  console.log('📡 Research API called');
+  
   try {
+    // Check if DeepResearchDegen was imported successfully
+    if (!DeepResearchDegen) {
+      return res.status(500).json({ 
+        error: 'Research service not available - import failed' 
+      });
+    }
+
     const { projectName, website, twitter, contractAddress } = req.body;
 
     if (!projectName) {
