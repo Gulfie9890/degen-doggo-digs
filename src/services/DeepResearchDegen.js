@@ -97,11 +97,50 @@ Contract Address: ${input.contractAddress || 'Not provided'}
 
     // Enhanced source processing with quality scoring
     const processedSources = this.processAndScoreSources(sources);
-    const topSources = processedSources.slice(0, 25); // Increased from 20
     
-    const sourcesText = topSources.map((source, index) => 
-      `Source ${index + 1}: ${source.title}\nURL: ${source.url}\nQuality Score: ${source.qualityScore}\nContent: ${source.content.substring(0, 8000)}${source.content.length > 8000 ? '...' : ''}\n\n`
+    // Implement tiered source processing to maximize information utilization
+    const tierSizes = {
+      premium: Math.min(15, processedSources.length), // Top sources get full content
+      standard: Math.min(40, Math.max(0, processedSources.length - 15)), // Next tier gets summarized
+      compressed: Math.min(100, Math.max(0, processedSources.length - 55)) // Rest get compressed summaries
+    };
+    
+    // Process premium sources (full content)
+    const premiumSources = processedSources.slice(0, tierSizes.premium);
+    const premiumText = premiumSources.map((source, index) => 
+      `Premium Source ${index + 1}: ${source.title}\nURL: ${source.url}\nQuality Score: ${source.qualityScore}\nContent: ${source.content.substring(0, 8000)}${source.content.length > 8000 ? '...' : ''}\n\n`
     ).join('');
+    
+    // Process standard sources (summarized content)
+    const standardSources = processedSources.slice(tierSizes.premium, tierSizes.premium + tierSizes.standard);
+    let standardText = '';
+    if (standardSources.length > 0) {
+      const standardSummaries = await this.summarizeSources(standardSources, 'standard');
+      standardText = standardSummaries.map((summary, index) => 
+        `Standard Source ${index + 1}: ${standardSources[index].title}\nURL: ${standardSources[index].url}\nSummary: ${summary}\n\n`
+      ).join('');
+    }
+    
+    // Process compressed sources (brief summaries)
+    const compressedSources = processedSources.slice(tierSizes.premium + tierSizes.standard, tierSizes.premium + tierSizes.standard + tierSizes.compressed);
+    let compressedText = '';
+    if (compressedSources.length > 0) {
+      const compressedSummaries = await this.summarizeSources(compressedSources, 'compressed');
+      compressedText = `\nAdditional Sources (${compressedSources.length} sources):\n` + 
+        compressedSummaries.map((summary, index) => 
+          `${index + 1}. ${compressedSources[index].title}: ${summary}`
+        ).join('\n') + '\n\n';
+    }
+    
+    const sourcesText = premiumText + standardText + compressedText;
+    
+    this.logDebug('source_processing', {
+      totalSources: processedSources.length,
+      premiumSources: tierSizes.premium,
+      standardSources: tierSizes.standard,
+      compressedSources: tierSizes.compressed,
+      totalContentLength: sourcesText.length
+    });
 
     // Include pipeline results for cross-referencing
     const pipelineInfo = pipelineResults ? `
@@ -134,9 +173,9 @@ Please structure your response according to the report structure provided above.
     this.logDebug('ai_generation', {
       tokensUsed: response.usage?.total_tokens || 0,
       duration,
-      sourcesUsed: topSources.length,
+      sourcesUsed: processedSources.length,
       reportLength: result.length,
-      averageSourceQuality: topSources.reduce((sum, s) => sum + s.qualityScore, 0) / topSources.length
+      averageSourceQuality: processedSources.length > 0 ? processedSources.reduce((sum, s) => sum + s.qualityScore, 0) / processedSources.length : 0
     });
 
     return result;
@@ -413,7 +452,7 @@ Please structure your response according to the report structure provided above.
 
       const researchReport = {
         report,
-        sources: finalSources.slice(0, 25), // Increased from 20
+        sources: finalSources.slice(0, 100), // Return up to 100 sources for metadata
         requestId,
         confidenceScore,
         metadata: {
@@ -525,6 +564,76 @@ Please structure your response according to the report structure provided above.
     };
     this.debugLogs.push(logEntry);
     console.log(`[DEBUG ${event}]:`, data);
+  }
+
+  // Source summarization methods for content compression
+  async summarizeSources(sources, mode = 'standard') {
+    const summaries = [];
+    const batchSize = mode === 'compressed' ? 8 : 4; // Process more sources per batch for compressed mode
+    
+    for (let i = 0; i < sources.length; i += batchSize) {
+      const batch = sources.slice(i, i + batchSize);
+      const batchSummaries = await this.summarizeBatch(batch, mode);
+      summaries.push(...batchSummaries);
+      
+      // Add delay to respect rate limits
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    
+    return summaries;
+  }
+  
+  async summarizeBatch(sources, mode) {
+    const maxContentLength = mode === 'compressed' ? 2000 : 4000;
+    const targetSummaryLength = mode === 'compressed' ? 150 : 300;
+    
+    const sourcesText = sources.map((source, index) => 
+      `Source ${index + 1}: ${source.title}\nContent: ${source.content.substring(0, maxContentLength)}\n\n`
+    ).join('');
+    
+    const prompt = mode === 'compressed' 
+      ? `Provide brief ${targetSummaryLength}-character summaries for each source below. Focus on: key facts, tokenomics, team info, risks, and unique value propositions. Be concise but informative.\n\n${sourcesText}`
+      : `Provide detailed ${targetSummaryLength}-character summaries for each source below. Include: project details, tokenomics, team background, partnerships, technical aspects, community sentiment, and any red flags.\n\n${sourcesText}`;
+    
+    try {
+      const response = await this.openai.chat.completions.create({
+        model: "gpt-4.1-2025-04-14",
+        max_completion_tokens: mode === 'compressed' ? 1000 : 2000,
+        temperature: 0.2,
+        messages: [{ role: "user", content: prompt }]
+      });
+      
+      const summaryText = response.choices[0].message.content;
+      
+      // Parse summaries - simple split approach
+      const summaries = summaryText
+        .split(/Source \d+:|^\d+\./gm)
+        .slice(1) // Remove first empty element
+        .map(s => s.trim())
+        .filter(s => s.length > 20); // Filter out very short responses
+      
+      // Ensure we have summaries for all sources
+      while (summaries.length < sources.length) {
+        summaries.push(`Summary not available for ${sources[summaries.length].title}`);
+      }
+      
+      this.logDebug('batch_summarization', {
+        mode,
+        sourcesCount: sources.length,
+        summariesGenerated: summaries.length,
+        tokensUsed: response.usage?.total_tokens || 0
+      });
+      
+      return summaries.slice(0, sources.length);
+    } catch (error) {
+      console.error('Summarization failed:', error);
+      this.logDebug('summarization_error', { mode, error: error.message });
+      
+      // Fallback: return truncated content
+      return sources.map(source => 
+        source.content.substring(0, targetSummaryLength) + (source.content.length > targetSummaryLength ? '...' : '')
+      );
+    }
   }
 
   generateRequestId() {
