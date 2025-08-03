@@ -217,25 +217,48 @@ Please structure your response according to the report structure provided above.
 
   expandQueries(baseTerms, variationCount = 3) {
     const variations = [];
-    const suffixes = [
-      "crypto token analysis",
-      "blockchain project review", 
-      "tokenomics breakdown",
-      "team funding investors",
-      "price prediction analysis",
-      "community social media",
-      "smart contract audit",
-      "roadmap development"
+    const projectName = baseTerms[0]; // Assume first term is project name
+    
+    // Base queries
+    baseTerms.forEach(term => variations.push(term));
+    
+    // Site-specific queries for diverse sources
+    const siteQueries = [
+      `site:twitter.com ${projectName}`,
+      `site:medium.com ${projectName}`,
+      `site:github.com ${projectName}`,
+      `site:reddit.com ${projectName}`
     ];
-
+    variations.push(...siteQueries);
+    
+    // Technical and analysis queries
+    const technicalSuffixes = [
+      "whitepaper technical documentation",
+      "tokenomics economic model",
+      "smart contract audit security",
+      "team founders investors funding",
+      "roadmap development milestones",
+      "community governance forum discussion"
+    ];
+    
+    // Market and sentiment queries
+    const marketSuffixes = [
+      "price analysis market cap",
+      "trading volume liquidity",
+      "community sentiment social signals",
+      "partnerships integrations ecosystem"
+    ];
+    
+    const allSuffixes = [...technicalSuffixes, ...marketSuffixes];
+    
     baseTerms.forEach(term => {
-      variations.push(term);
-      for (let i = 0; i < variationCount && i < suffixes.length; i++) {
-        variations.push(`${term} ${suffixes[i]}`);
+      for (let i = 0; i < variationCount && i < allSuffixes.length; i++) {
+        variations.push(`${term} ${allSuffixes[i]}`);
       }
     });
 
-    return variations;
+    // Remove duplicates and return
+    return [...new Set(variations)];
   }
 
   deduplicateSources(sources) {
@@ -314,7 +337,10 @@ Please structure your response according to the report structure provided above.
         const queries = this.expandQueries(stage.terms, stage.queryMultiplier);
         
         const searchResult = await withExponentialBackoff(
-          () => this.searchService.searchEnhanced(queries, { maxResults: 3 }),
+          () => this.searchService.searchEnhanced(queries, { 
+            maxResults: 5, 
+            queryLimit: 25 
+          }),
           stage.essential ? 3 : 1,
           1000
         );

@@ -111,14 +111,10 @@ export class EnhancedSearchService {
         max_results: maxResults
       };
 
-      // Only add domain filtering if requested and for crypto-related queries
+      // Instead of restricting to only these domains, boost preferred sources
       if (useDomainFiltering && this.isCryptoQuery(query)) {
-        payload.include_domains = [
-          'cointelegraph.com',
-          'coindesk.com',
-          'coingecko.com',
-          'coinmarketcap.com'
-        ];
+        // Enhance query to boost preferred crypto sources without restricting others
+        payload.query = `${query} (site:twitter.com OR site:medium.com OR site:github.com OR site:coingecko.com OR site:coinmarketcap.com OR site:coindesk.com OR site:cointelegraph.com)`;
       }
 
       console.log('[TAVILY] Request payload:', JSON.stringify(payload, null, 2));
@@ -189,16 +185,20 @@ export class EnhancedSearchService {
     let totalQueries = 0;
     let successfulQueries = 0;
 
-    // Limit queries and add validation
+    // Increase query limit and configurability
+    const queryLimit = options.queryLimit || 25;
+    const maxResultsPerQuery = options.maxResults || 5;
+    
     const validQueries = queries
-      .slice(0, 10)
+      .slice(0, queryLimit)
       .filter(query => this.validateQuery(query))
       .map(query => this.sanitizeQuery(query));
 
-    console.log('[TAVILY] Processing', validQueries.length, 'valid queries');
+    console.log('[TAVILY] Processing', validQueries.length, 'valid queries (limit:', queryLimit, ')');
+    console.log('[DEBUG] Query variety:', this.analyzeQueryDiversity(validQueries));
 
     for (const query of validQueries) {
-      const response = await this.searchSingle(query, { ...options, maxResults: 2 });
+      const response = await this.searchSingle(query, { ...options, maxResults: maxResultsPerQuery });
       
       if (response.results.length > 0) {
         allResults.push(...response.results);
@@ -227,6 +227,26 @@ export class EnhancedSearchService {
       results: uniqueResults,
       totalQueries,
       cacheHitRate: 0
+    };
+  }
+
+  analyzeQueryDiversity(queries) {
+    const uniqueWords = new Set();
+    const siteQueries = queries.filter(q => q.includes('site:')).length;
+    const technicalTerms = ['whitepaper', 'tokenomics', 'audit', 'technical', 'documentation'].filter(term => 
+      queries.some(q => q.toLowerCase().includes(term))
+    ).length;
+    
+    queries.forEach(query => {
+      query.toLowerCase().split(' ').forEach(word => uniqueWords.add(word));
+    });
+    
+    return {
+      totalQueries: queries.length,
+      uniqueWords: uniqueWords.size,
+      siteSpecificQueries: siteQueries,
+      technicalQueries: technicalTerms,
+      diversityScore: Math.round((uniqueWords.size / (queries.length * 3)) * 100)
     };
   }
 }
