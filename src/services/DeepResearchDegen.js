@@ -836,7 +836,6 @@ Respond with ONLY a JSON array like: [1, 15, 3, 22, 8, ...]`
           this.openai.responses.create({
             model,
             input: prompt,
-            temperature: 0.3,
             max_output_tokens: safeTokens
           })
         );
