@@ -819,40 +819,63 @@ Respond with ONLY a JSON array like: [1, 15, 3, 22, 8, ...]`
 
   async llmCall(model, tokens, prompt) {
     try {
-      // Use max_completion_tokens for newer models, max_tokens for older ones
       const isReasoningModel = model.startsWith("o1") || model.startsWith("o3") || model.startsWith("o4");
-      const params = isReasoningModel 
-        ? { model, max_completion_tokens: tokens, temperature: 0.3 }
-        : { model, max_completion_tokens: tokens, temperature: 0.3 };
 
-      const response = await withExponentialBackoff(() =>
-        this.openai.chat.completions.create({
-          ...params,
-          messages: [{ role: "user", content: prompt }]
-        })
-      );
+      if (isReasoningModel) {
+        // Use Responses API for reasoning models
+        const response = await withExponentialBackoff(() =>
+          this.openai.responses.create({
+            model,
+            input: prompt,
+            temperature: 0.3,
+            max_output_tokens: tokens
+          })
+        );
 
-      // Enhanced response validation
-      if (!response.choices?.[0]?.message?.content) {
-        throw new Error(`Invalid response from model ${model}: No content returned`);
+        if (!response.output_text) {
+          throw new Error(`Invalid response from model ${model}: No output_text returned`);
+        }
+
+        this.logDebug('llm_call_success', {
+          model,
+          tokens: tokens,
+          responseLength: response.output_text.length
+        });
+
+        return response.output_text;
+
+      } else {
+        // Use Chat Completions API for standard models
+        const response = await withExponentialBackoff(() =>
+          this.openai.chat.completions.create({
+            model,
+            max_completion_tokens: tokens,
+            temperature: 0.3,
+            messages: [{ role: "user", content: prompt }]
+          })
+        );
+
+        if (!response.choices?.[0]?.message?.content) {
+          throw new Error(`Invalid response from model ${model}: No content returned`);
+        }
+
+        this.logDebug('llm_call_success', {
+          model,
+          tokens: response.usage?.total_tokens || 0,
+          responseLength: response.choices[0].message.content.length
+        });
+
+        return response.choices[0].message.content;
       }
 
-      this.logDebug('llm_call_success', {
-        model,
-        tokens: response.usage?.total_tokens || 0,
-        responseLength: response.choices[0].message.content.length
-      });
-
-      return response.choices[0].message.content;
     } catch (error) {
       this.logDebug('llm_call_error', { model, error: error.message });
-      
-      // Enhanced error handling with fallback
+
       if (error.message.includes('model') && model !== MODEL_CONFIG.fallback) {
         console.warn(`Model ${model} failed, attempting fallback to ${MODEL_CONFIG.fallback}`);
         return this.llmCall(MODEL_CONFIG.fallback, tokens, prompt);
       }
-      
+
       console.error(`LLM call failed for model ${model}:`, error.message);
       throw new Error(`AI model call failed: ${error.message}`);
     }
