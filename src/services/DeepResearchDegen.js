@@ -819,37 +819,51 @@ Respond with ONLY a JSON array like: [1, 15, 3, 22, 8, ...]`
 
   async llmCall(model, tokens, prompt) {
     try {
-      const isReasoningModel = model.startsWith("o1") || model.startsWith("o3") || model.startsWith("o4");
+      const MODEL_LIMITS = {
+        "gpt-4.1-2025-04-14": 32768,     // Chat model
+        "o3-deep-research": 100000       // Reasoning model
+      };
+
+      const isReasoningModel = model === "o3-deep-research";
+
+      // Auto-cap tokens based on model limits
+      const maxAllowed = MODEL_LIMITS[model] || 32000;
+      const safeTokens = Math.min(tokens, maxAllowed);
 
       if (isReasoningModel) {
-        // Use Responses API for reasoning models
+        // Responses API for o3-deep-research
         const response = await withExponentialBackoff(() =>
           this.openai.responses.create({
             model,
             input: prompt,
             temperature: 0.3,
-            max_output_tokens: tokens
+            max_output_tokens: safeTokens
           })
         );
 
-        if (!response.output_text) {
-          throw new Error(`Invalid response from model ${model}: No output_text returned`);
+        const outputText = response.output_text ||
+          (response.output && Array.isArray(response.output)
+            ? response.output.map(o => o.text || "").join("\n").trim()
+            : "");
+
+        if (!outputText) {
+          throw new Error(`Invalid response from model ${model}: No output text returned`);
         }
 
         this.logDebug('llm_call_success', {
           model,
-          tokens: tokens,
-          responseLength: response.output_text.length
+          tokens: safeTokens,
+          responseLength: outputText.length
         });
 
-        return response.output_text;
+        return outputText;
 
       } else {
-        // Use Chat Completions API for standard models
+        // Chat Completions API for gpt-4.1-2025-04-14
         const response = await withExponentialBackoff(() =>
           this.openai.chat.completions.create({
             model,
-            max_completion_tokens: tokens,
+            max_completion_tokens: safeTokens,
             temperature: 0.3,
             messages: [{ role: "user", content: prompt }]
           })
@@ -861,7 +875,7 @@ Respond with ONLY a JSON array like: [1, 15, 3, 22, 8, ...]`
 
         this.logDebug('llm_call_success', {
           model,
-          tokens: response.usage?.total_tokens || 0,
+          tokens: response.usage?.total_tokens || safeTokens,
           responseLength: response.choices[0].message.content.length
         });
 
