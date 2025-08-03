@@ -218,10 +218,10 @@ Please structure your response according to the report structure provided above.
   expandQueries(baseTerms, variationCount = 3) {
     const variations = [];
     const projectName = baseTerms[0]; // Assume first term is project name
-    
+
     // Base queries
     baseTerms.forEach(term => variations.push(term));
-    
+
     // Site-specific queries for diverse sources
     const siteQueries = [
       `site:twitter.com ${projectName}`,
@@ -230,8 +230,8 @@ Please structure your response according to the report structure provided above.
       `site:reddit.com ${projectName}`
     ];
     variations.push(...siteQueries);
-    
-    // Technical and analysis queries
+
+    // Technical and analysis suffixes
     const technicalSuffixes = [
       "whitepaper technical documentation",
       "tokenomics economic model",
@@ -240,25 +240,41 @@ Please structure your response according to the report structure provided above.
       "roadmap development milestones",
       "community governance forum discussion"
     ];
-    
-    // Market and sentiment queries
+
+    // Market and sentiment suffixes
     const marketSuffixes = [
       "price analysis market cap",
       "trading volume liquidity",
       "community sentiment social signals",
       "partnerships integrations ecosystem"
     ];
-    
+
+    // Merge and shuffle suffixes to avoid Tavily cache bias
     const allSuffixes = [...technicalSuffixes, ...marketSuffixes];
-    
+    for (let i = allSuffixes.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [allSuffixes[i], allSuffixes[j]] = [allSuffixes[j], allSuffixes[i]];
+    }
+
+    // Randomly choose variationCount suffixes for each base term
     baseTerms.forEach(term => {
-      for (let i = 0; i < variationCount && i < allSuffixes.length; i++) {
-        variations.push(`${term} ${allSuffixes[i]}`);
-      }
+      const shuffled = [...allSuffixes].sort(() => Math.random() - 0.5);
+      shuffled.slice(0, variationCount).forEach(suffix => {
+        variations.push(`${term} ${suffix}`);
+      });
     });
 
-    // Remove duplicates and return
-    return [...new Set(variations)];
+    // Add occasional "noise" terms to bust caches
+    const noiseTerms = ["2025", "latest news", "breaking", "update", "review", "overview"];
+    if (Math.random() < 0.5) { // 50% chance to add noise
+      baseTerms.forEach(term => {
+        const noise = noiseTerms[Math.floor(Math.random() * noiseTerms.length)];
+        variations.push(`${term} ${noise}`);
+      });
+    }
+
+    // Final shuffle to maximize diversity
+    return [...new Set(variations)].sort(() => Math.random() - 0.5);
   }
 
   deduplicateSources(sources) {
